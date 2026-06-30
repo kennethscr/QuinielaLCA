@@ -65,6 +65,16 @@
   .row.top1 .rank{color:var(--gold)} .row.top2 .rank{color:#9aa3a0} .row.top3 .rank{color:#b07b46}
   .rname{flex:1;font-weight:600}
   .rsub{font-size:11px;color:var(--muted);font-weight:400}
+  .arrow{background:none;border:none;cursor:pointer;font-size:14px;color:var(--muted);padding:4px 8px;transition:transform .15s}
+  .arrow.open{transform:rotate(90deg)}
+  .detail{margin:0 0 8px;padding:10px 12px;background:#f3f5f2;border:1px solid var(--line);border-radius:10px}
+  .detail-row{display:flex;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid #e6eae5;font-size:12px}
+  .detail-row:last-child{border-bottom:none}
+  .detail-match{font-weight:600;color:var(--ink)}
+  .detail-sub{color:var(--muted);font-size:11px;margin-top:2px}
+  .detail-pts{font-family:Oswald;font-weight:700;font-size:14px;white-space:nowrap}
+  .detail-pts.zero{color:var(--muted)}
+  .ok{color:var(--pitch);font-weight:600} .no{color:#b04a3a}
   .pts{font-family:Oswald;font-weight:700;font-size:18px} .pts small{font-family:Inter;font-weight:500;font-size:11px;color:var(--muted);margin-left:3px}
 
   .gate{min-height:68vh;display:flex;flex-direction:column;justify-content:center;gap:12px;max-width:380px;margin:0 auto}
@@ -154,7 +164,7 @@ const ADMIN_EMAIL   = "kenneth.s.cr@gmail.com";   // tu correo, en minúsculas, 
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
 
-let user=null, isAdmin=false, matches=[], mypreds={}, mode='login';
+let user=null, isAdmin=false, matches=[], mypreds={}, mode='login', miNombre='';
 const $=id=>document.getElementById(id);
 const show=id=>$(id).classList.remove('hidden');
 const hide=id=>$(id).classList.add('hidden');
@@ -175,6 +185,7 @@ async function routeFor(session){
   isAdmin=(user.email||'').toLowerCase()===ADMIN_EMAIL.toLowerCase();
   const {data:prof}=await sb.from('profiles').select('nombre').eq('id',user.id).maybeSingle();
   if(!prof||!prof.nombre){hideAll();show('screen-name');return;}
+  miNombre=prof.nombre;
   $('who').innerHTML=`<b>${esc(prof.nombre)}</b>${isAdmin?' · admin':''}<br><button class="btn ghost" id="btn-out">Salir</button>`;
   $('btn-out').onclick=async()=>{await sb.auth.signOut();};
   $('tab-admin').classList.toggle('hidden',!isAdmin);
@@ -333,11 +344,49 @@ async function loadTabla(){
   const {data,error}=await sb.rpc('get_leaderboard');
   if(error){box.innerHTML=`<div class="empty">No se pudo cargar la tabla.</div>`;return;}
   if(!data||!data.length){box.innerHTML=`<div class="empty">Aún no hay resultados cargados.<br>La tabla aparece cuando se carguen los primeros marcadores.</div>`;return;}
-  box.innerHTML=data.map((r,i)=>`<div class="row ${i<3?'top'+(i+1):''}">
-    <div class="rank">${i+1}</div>
-    <div class="rname">${esc(r.nombre)}<div class="rsub">${r.pasa_ok||0} aciertos de quién pasa · ${r.exactos||0} marcadores exactos</div></div>
-    <div class="pts">${r.puntos}<small>pts</small></div>
-  </div>`).join('');
+  box.innerHTML=data.map((r,i)=>{
+    const esMio = r.nombre===miNombre;
+    return `<div class="row ${i<3?'top'+(i+1):''}">
+      <div class="rank">${i+1}</div>
+      <div class="rname">${esc(r.nombre)}<div class="rsub">${r.pasa_ok||0} aciertos de quién pasa · ${r.exactos||0} marcadores exactos</div></div>
+      <div class="pts">${r.puntos}<small>pts</small></div>
+      ${esMio?`<button class="arrow" data-audit title="Ver mi detalle">▶</button>`:''}
+    </div>
+    ${esMio?`<div class="detail hidden" data-detail></div>`:''}`;
+  }).join('');
+  const btn=box.querySelector('[data-audit]');
+  if(btn){
+    btn.onclick=()=>{
+      const det=box.querySelector('[data-detail]');
+      const abierto=!det.classList.contains('hidden');
+      if(abierto){det.classList.add('hidden');btn.classList.remove('open');}
+      else{det.innerHTML=miDetalleHTML();det.classList.remove('hidden');btn.classList.add('open');}
+    };
+  }
+}
+function miDetalleHTML(){
+  // Mis partidos YA JUGADOS (con resultado cargado), con lo que puse vs lo que salió
+  const jugados=matches.filter(m=>m.rg1!=null && m.rg2!=null);
+  const filas=jugados.map(m=>{
+    const p=mypreds[m.id];
+    if(!p) return '';  // no pronostiqué ese partido
+    const pasaOk = m.advanced && p.advance_pick===m.advanced;
+    const exactoOk = p.g1===m.rg1 && p.g2===m.rg2;
+    const pts=(pasaOk?3:0)+(exactoOk?2:0);
+    const miPasa = p.advance_pick==='equipo1'?m.equipo1:(p.advance_pick==='equipo2'?m.equipo2:'—');
+    const realPasa = m.advanced==='equipo1'?m.equipo1:(m.advanced==='equipo2'?m.equipo2:'—');
+    return `<div class="detail-row">
+      <div>
+        <div class="detail-match">${esc(m.equipo1)} ${m.rg1}–${m.rg2} ${esc(m.equipo2)}</div>
+        <div class="detail-sub">
+          Quién pasa: pusiste <b class="${pasaOk?'ok':'no'}">${esc(miPasa)}</b>${m.advanced?` · pasó ${esc(realPasa)}`:''} ${pasaOk?'✓':'✗'}<br>
+          Marcador: pusiste <b class="${exactoOk?'ok':'no'}">${p.g1}–${p.g2}</b> ${exactoOk?'✓ exacto':'✗'}
+        </div>
+      </div>
+      <div class="detail-pts ${pts===0?'zero':''}">${pts} pts</div>
+    </div>`;
+  }).filter(Boolean).join('');
+  return filas || `<div class="empty" style="padding:14px">Todavía no tenés partidos jugados para auditar.</div>`;
 }
 
 /* ---------- PANEL DE ADMIN ---------- */
